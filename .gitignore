@@ -1,0 +1,31 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# 真实密钥与本机配置：只有 .env.example 可入库
+.env
+.env.*
+!.env.example
+
+app/var/
+tests/artifacts/
+test/artifacts/
+.probe/
+
+# 本机凭据（原来写的是 admin-credentials.txt，与实际文件名不符，两个都拦）
+docs/credentials.txt
+docs/admin-credentials.txt
+
+# 运行时数据：SQLite 库、用户上传、抽取缓存、备份——绝不入库
+/data/
+# 抓取/同步的中间产物（DSH 目录 JSON、目标状态），由 tools/sync_dsh_catalog.py 重建
+/work/
+.bak/
+*.bak
+logs-*.log
+
+# dist/ 只忽略项目根的打包输出；app/static/ui/bundle 是前端构建产物，必须随包发布
+/dist/
+web/dist/
+web/node_modules/

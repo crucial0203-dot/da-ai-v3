@@ -1,0 +1,117 @@
+/*
+ * 设计 token —— V4.0 N2，单一事实源见 web/DESIGN.md。
+ * 三主题：:root[data-theme="light|dark|oled"]；暗色不是简单反色，墨绿提亮。
+ * 语义色 + soft 变体；字阶 --fs-*；间距 4 倍数。
+ */
+
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f7f6f3;
+  --surface: #ffffff;
+  --surface-2: #f1efe9;
+  --line: #e3e0d7;
+  --line-soft: #edeae2;
+  --text: #1c1c1a;
+  --text-2: #55524a;
+  --muted: #8a857a;
+  --primary: #1f3d35;
+  --primary-contrast: #ffffff;
+  --primary-soft: #e4ece8;
+  --accent: #a8763e;
+  --accent-soft: #f3e9dc;
+  --danger: #b3402e;
+  --danger-soft: #f7e4e0;
+  --ok: #2e6b46;
+  --ok-soft: #e2efe6;
+  --warn: #9a6a1c;
+  --warn-soft: #f5ecd8;
+  --ink: #2b2b28;
+  /* 工作流时间线 */
+  --wf-running: #a8763e;
+  --wf-done: #2e6b46;
+  --wf-failed: #b3402e;
+  --wf-waiting: #9a6a1c;
+  --shadow: 0 1px 3px rgb(28 28 26 / 0.07), 0 4px 14px rgb(28 28 26 / 0.05);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #131512;
+  --surface: #1b1e1a;
+  --surface-2: #232722;
+  --line: #34392f;
+  --line-soft: #2a2e27;
+  --text: #e8e6e1;
+  --text-2: #b3b0a6;
+  --muted: #7d7a70;
+  --primary: #7fa89a;
+  --primary-contrast: #10201b;
+  --primary-soft: #24332d;
+  --accent: #c99a5f;
+  --accent-soft: #383021;
+  --danger: #d06855;
+  --danger-soft: #3a2420;
+  --ok: #6faf87;
+  --ok-soft: #1f2f25;
+  --warn: #d0a05c;
+  --warn-soft: #332a1a;
+  --ink: #e8e6e1;
+  --wf-running: #c99a5f;
+  --wf-done: #6faf87;
+  --wf-failed: #d06855;
+  --wf-waiting: #d0a05c;
+  --shadow: 0 1px 3px rgb(0 0 0 / 0.4), 0 4px 14px rgb(0 0 0 / 0.3);
+}
+
+:root[data-theme="oled"] {
+  color-scheme: dark;
+  --bg: #000000;
+  --surface: #0b0d0b;
+  --surface-2: #131613;
+  --line: #242824;
+  --line-soft: #1a1d1a;
+  --text: #eceae4;
+  --text-2: #a8a59b;
+  --muted: #6b685f;
+  --primary: #8db4a6;
+  --primary-contrast: #04120e;
+  --primary-soft: #14201b;
+  --accent: #d3a869;
+  --accent-soft: #241d10;
+  --danger: #e07a66;
+  --danger-soft: #241210;
+  --ok: #79ba90;
+  --ok-soft: #0f1c14;
+  --warn: #dcaa62;
+  --warn-soft: #211a0c;
+  --ink: #eceae4;
+  --wf-running: #d3a869;
+  --wf-done: #79ba90;
+  --wf-failed: #e07a66;
+  --wf-waiting: #dcaa62;
+  --shadow: none;
+}
+
+:root {
+  --fs-12: 0.75rem;
+  --fs-13: 0.8125rem;
+  --fs-14: 0.875rem;
+  --fs-15: 0.9375rem;
+  --fs-16: 1rem;
+  --fs-18: 1.125rem;
+  --fs-22: 1.375rem;
+  --fs-28: 1.75rem;
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --s-10: 40px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --sidebar-w: 264px;
+  --font-mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+}
