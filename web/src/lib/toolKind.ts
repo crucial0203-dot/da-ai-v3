@@ -86,8 +86,42 @@ const TOOL_KIND_MAP: Record<string, ToolKind> = {
   _parse: "other",
 };
 
+/**
+ * 工具名 → 中文名兜底（旧后端 / 历史消息没带 label 时用）。
+ * 与后端 `registry.py` 的 ToolSpec.label、市场 `catalog.json` 的 label 对齐；
+ * 认不出的名字原样显示——比笼统的「调用」更能让用户知道发生了什么。
+ */
 const FALLBACK_LABELS: Record<string, string> = {
   _parse: "工具调用解析",
+  // V4.0 具名工具
+  web_search: "联网检索",
+  fetch_url: "抓取网页",
+  rag_query: "知识库检索",
+  memory_query: "读记忆",
+  artifact_create: "创建制品",
+  doc_generate: "生成文档",
+  file_list: "列出文件",
+  // 市场工具包
+  calc: "四则运算",
+  text_stats: "文本统计",
+  render_template: "模板渲染",
+  date_calc: "日期计算",
+  unit_convert: "单位换算",
+  json_format: "JSON 处理",
+  regex_test: "正则测试",
+  md_table: "Markdown 表格",
+  text_dedupe: "文本去重",
+  cn_number: "中文数字转换",
+  rand_gen: "随机生成",
+  encode_text: "编码与摘要",
+  // V3 技能工具
+  "file.read": "读取文件",
+  "reference.verify": "出处核验",
+  "minimax.generate": "模型生成",
+  "pptx.create": "创建 PPTX",
+  "pptx.modify": "修改 PPTX",
+  "pptx.validate": "校验 PPTX",
+  "artifact.write": "写入交付物",
 };
 
 export function kindOfTool(name: string): ToolKind {

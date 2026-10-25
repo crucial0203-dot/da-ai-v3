@@ -17,6 +17,7 @@
 """
 from __future__ import annotations
 
+import html as html_lib
 import re
 
 from .. import config, db
@@ -26,6 +27,15 @@ _HTML_BLOCK = re.compile(r"```html\s*\n?([\s\S]*?)\n?```", re.IGNORECASE)
 _CSS_BLOCK = re.compile(r"```css\s*\n?([\s\S]*?)\n?```", re.IGNORECASE)
 _JS_BLOCK = re.compile(r"```js\s*\n?([\s\S]*?)\n?```", re.IGNORECASE)
 _HTML_TAG = re.compile(r"```html\s*\n?([\s\S]*?)\n?```", re.IGNORECASE)
+
+# 字数统计用：先剔掉 script/style 整块，再去标签、反转义实体、去空白。
+_BLOCK = re.compile(r"<(script|style)\b[^>]*>[\s\S]*?</\1>", re.IGNORECASE)
+_TAG = re.compile(r"<[^>]+>")
+_SPACE = re.compile(r"\s+")
+
+# 组装完整文档时固定的模板开销（DOCTYPE/head/meta/body 等），
+# 版本写入的尺寸校验放宽这么多，避免模板本身把合法内容顶出上限。
+DOC_OVERHEAD = 4096
 
 # 不允许出现在制品里的危险协议
 _DANGEROUS = (
@@ -55,6 +65,18 @@ def _sanitize(html: str) -> str:
     out = re.sub(r"vbscript:", "blocked:", out, flags=re.I)
     out = re.sub(r"data:text/html", "blocked:data", out, flags=re.I)
     return out
+
+
+def count_chars(document: str) -> int:
+    """制品字数：可见正文字符数。
+
+    卡片上的「N 字」是给用户判断内容量用的，HTML 标签、CSS、JS 都不算字。
+    （以前用 LENGTH(html)，一份带样式的文档会被算成几万字。）
+    """
+    text = _BLOCK.sub("", document or "")
+    text = _TAG.sub("", text)
+    text = html_lib.unescape(text)
+    return len(_SPACE.sub("", text))
 
 
 def extract_blocks(text: str) -> dict[str, str]:
@@ -121,15 +143,16 @@ def create_artifact(user_id: str, title: str, html: str, css: str = "", js: str 
     """创建一个制品，返回 id。"""
     if not config.ARTIFACTS_ENABLED:
         raise ValueError("制品功能未开启")
-    if len(html or "") > config.ARTIFACT_MAX_CHARS:
+    # 三块都要算进上限：只查 html 的话，css/js 能绕过尺寸限制。
+    if len(html or "") + len(css or "") + len(js or "") > config.ARTIFACT_MAX_CHARS:
         raise ValueError(f"制品内容超过 {config.ARTIFACT_MAX_CHARS} 字上限")
     document = build_document(html, css, js)
     art_id = db.new_id("a_")
     db.execute(
-        "INSERT INTO artifacts(id, user_id, task_id, message_id, title, language, html, version, created_at) "
-        "VALUES(?,?,?,?,?,'html',?,1,?)",
+        "INSERT INTO artifacts(id, user_id, task_id, message_id, title, language, html, version, created_at, chars) "
+        "VALUES(?,?,?,?,?,'html',?,1,?,?)",
         (art_id, user_id, task_id, message_id, (title or "未命名制品")[:80],
-         document, db.now_iso()),
+         document, db.now_iso(), count_chars(document)),
     )
     return art_id
 
@@ -144,19 +167,20 @@ def get_artifact(artifact_id: str, user_id: str) -> dict | None:
 
 
 def list_artifacts(user_id: str, task_id: str | None = None) -> list[dict]:
-    # P1-7：带出 html 长度（制品字数）。只取 length() 不取正文本身——
-    # 列表接口要轻，制品正文可能有几十 KB。
+    # P1-7：带出正文字数（chars）。列表接口不取正文本身——可能几十 KB。
     sql = (
-        "SELECT id, title, language, version, task_id, message_id, created_at, "
-        "LENGTH(html) AS chars FROM artifacts WHERE user_id = ?"
+        "SELECT id, title, language, version, task_id, message_id, created_at, chars "
+        "FROM artifacts WHERE user_id = ?"
     )
     args: list = [user_id]
     if task_id:
         sql += " AND task_id = ?"
         args.append(task_id)
-        sql += " ORDER BY created_at DESC"
+        # created_at 只到秒：同一秒建的多个制品靠 rowid 定先后，
+        # 否则「最新一张」可能取到先写的那张
+        sql += " ORDER BY created_at DESC, rowid DESC"
     else:
-        sql += " ORDER BY created_at DESC LIMIT 200"
+        sql += " ORDER BY created_at DESC, rowid DESC LIMIT 200"
     rows = db.rows(sql, tuple(args))
     return [dict(r) for r in rows]
 
@@ -199,14 +223,16 @@ def create_version(artifact_id: str, user_id: str, html: str) -> str:
     original = get_artifact(artifact_id, user_id)
     if not original:
         raise ValueError("制品不存在")
+    if len(html or "") > config.ARTIFACT_MAX_CHARS + DOC_OVERHEAD:
+        raise ValueError(f"制品内容超过 {config.ARTIFACT_MAX_CHARS} 字上限")
     new_id = db.new_id("a_")
     root = _root_id(artifact_id)
     version = _max_version_in_tree(root) + 1
     db.execute(
-        "INSERT INTO artifacts(id, user_id, task_id, message_id, title, language, html, version, parent_id, created_at) "
-        "VALUES(?,?,?,?,?,'html',?,?,?,?)",
+        "INSERT INTO artifacts(id, user_id, task_id, message_id, title, language, html, version, parent_id, created_at, chars) "
+        "VALUES(?,?,?,?,?,'html',?,?,?,?,?)",
         (new_id, original["user_id"], original["task_id"], original["message_id"],
-         original["title"], html, version, artifact_id, db.now_iso()),
+         original["title"], html, version, artifact_id, db.now_iso(), count_chars(html)),
     )
     return new_id
 

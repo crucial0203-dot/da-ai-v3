@@ -12,6 +12,20 @@
  */
 import { useState } from "react";
 import { ShimmerLabel } from "../Skeleton";
+import { openModal } from "../../store/app";
+
+/** 下载文件名：标题里的路径/控制字符替换掉，保证各平台都能落盘。 */
+function fileName(title?: string): string {
+  const base = (title || "制品").replace(/[\\/:*?"<>|]+/g, "_").trim() || "制品";
+  return `${base.slice(0, 80)}.html`;
+}
+
+/** 制品预览 iframe 的安全口径：
+ *  - allow-scripts 放行制品自己的内联脚本（交互是制品的一部分）；
+ *  - 绝不给 allow-same-origin —— 页面处于 opaque origin，碰不到父页面，
+ *    与 render 路由的 CSP（connect-src 'none'）共同构成隔离。
+ */
+const SANDBOX = "allow-scripts";
 
 export interface ArtifactCardProps {
   state: "generating" | "done";
@@ -58,14 +72,45 @@ export default function ArtifactCard({ state, words = 0, title, artifactId, vers
             >
               {preview ? "收起" : "预览"}
             </button>
-            <a className="btn btn-ghost btn-xs" href={`/api/artifacts/${artifactId}/render`} download>
+            <button
+              className="btn btn-ghost btn-xs"
+              data-testid="artifact-fullscreen"
+              onClick={() =>
+                openModal({
+                  title: title || "制品预览",
+                  wide: true,
+                  full: true,
+                  body: (
+                    <iframe
+                      className="artifact-frame artifact-frame-full"
+                      title={title || "制品预览"}
+                      sandbox={SANDBOX}
+                      src={`/api/artifacts/${artifactId}/render`}
+                    />
+                  ),
+                  actions: [{ label: "关闭" }],
+                })
+              }
+            >
+              全屏
+            </button>
+            <a
+              className="btn btn-ghost btn-xs"
+              href={`/api/artifacts/${artifactId}/render?download=1`}
+              download={fileName(title)}
+            >
               下载
             </a>
           </>
         )}
       </div>
       {preview && artifactId && (
-        <iframe className="artifact-frame" title={title || "制品预览"} sandbox="" src={`/api/artifacts/${artifactId}/render`} />
+        <iframe
+          className="artifact-frame"
+          title={title || "制品预览"}
+          sandbox={SANDBOX}
+          src={`/api/artifacts/${artifactId}/render`}
+        />
       )}
     </div>
   );

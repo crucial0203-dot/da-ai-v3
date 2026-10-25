@@ -6,6 +6,9 @@
 """
 from __future__ import annotations
 
+import re
+from urllib.parse import quote
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
@@ -58,8 +61,12 @@ def get_artifact(artifact_id: str, request: Request):
 
 
 @router.get("/{artifact_id}/render")
-def render_artifact(artifact_id: str, request: Request):
-    """渲染制品。下发独立 CSP，不继承主页面策略。"""
+def render_artifact(artifact_id: str, request: Request, download: bool = False):
+    """渲染制品。下发独立 CSP，不继承主页面策略。
+
+    download=1 时改成附件下载并给出带标题的文件名（预览 iframe 不带）。
+    内容是用户私有数据，统一 no-store，别留在共享电脑的浏览器缓存里。
+    """
     user = deps.current_user(request)
     row = artifacts.get_artifact(artifact_id, user["id"])
     if not row:
@@ -75,14 +82,21 @@ def render_artifact(artifact_id: str, request: Request):
         html = html.replace("<head>", "<head>\n" + meta_csp, 1)
     else:
         html = meta_csp + html
-    return HTMLResponse(
-        html,
-        headers={
-            "Content-Security-Policy": artifacts.RENDER_CSP,
-            "X-Content-Type-Options": "nosniff",
-            "Cache-Control": "private, max-age=300",
-        },
-    )
+    headers = {
+        "Content-Security-Policy": artifacts.RENDER_CSP,
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, no-store",
+    }
+    if download:
+        # 文件名：标题里的路径/控制字符替换掉，再给一个 ASCII 兜底名。
+        # filename* 传 UTF-8，现代浏览器会优先用它（中文标题不乱码）。
+        safe = re.sub(r'[\\/:*?"<>|\r\n]+', "_", str(row["title"] or "")).strip() or "artifact"
+        safe = safe[:80]
+        headers["Content-Disposition"] = (
+            f'attachment; filename="artifact-{artifact_id}.html"; '
+            f"filename*=UTF-8''{quote(safe + '.html')}"
+        )
+    return HTMLResponse(html, headers=headers)
 
 
 @router.post("/{artifact_id}/versions")

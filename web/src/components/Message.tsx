@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { formatSize, formatTime } from "../lib/format";
 import { renderMarkdown } from "../lib/md";
 import { splitToolResults, type ToolResultBlock } from "../lib/toolResult";
-import { kindIcon, kindLabel, kindOfTool } from "../lib/toolKind";
+import { kindIcon, kindOfTool, labelOfTool } from "../lib/toolKind";
 import { confirmDialog, openModal, toast } from "../store/app";
 import { api } from "../lib/api";
 import { StoppedRun } from "./StoppedRun";
@@ -29,7 +29,7 @@ export interface Msg {
   plan_flag?: boolean;
   skills?: string;
   web_flag?: boolean;
-  web_sources?: Array<{ n: number; title: string; url: string; provider?: string }>;
+  web_sources?: Array<{ n: number; title: string; url: string; provider?: string; provider_label?: string }>;
   // P1-4/P1-5：老后端不带这三个字段，缺省按「未停止、无分支」处理
   stopped?: boolean;
   parent_id?: number | null;
@@ -76,10 +76,13 @@ function CodeCopy({ html }: { html: string }) {
   return <div className="md" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-/** 工具回注卡：后端把工具结果以 user 消息回注给模型（<<<TOOL_RESULT>>> 块），
+/** 工具回注卡：后端把工具结果以 <<<TOOL_RESULT>>> 块回注给模型，
  * 那是线上格式不是用户言论——渲染成一行摘要，默认折叠，展开看原始 JSON。 */
 function ToolResultCard({ block }: { block: ToolResultBlock }) {
   const kind = kindOfTool(block.name);
+  // 显示具体工具名（「创建制品」）而不是笼统的 kind（「编辑」）：
+  // 历史回注只带工具名，kind 是分类，用户关心的是刚发生了什么。
+  const label = labelOfTool(block.name);
   return (
     <details
       className={`tool-result-card${block.isError ? " error" : ""}`}
@@ -89,7 +92,7 @@ function ToolResultCard({ block }: { block: ToolResultBlock }) {
     >
       <summary>
         <span aria-hidden>{kindIcon(kind)}</span>
-        <span className="tool-result-name">{kindLabel(kind)}</span>
+        <span className="tool-result-name" title={block.name}>{label}</span>
         <span className="grow truncate tool-result-summary">{block.summary}</span>
         {block.truncated && <span className="badge badge-warn">截断</span>}
       </summary>
@@ -140,6 +143,26 @@ export function Message({
       );
     }
     return null;
+  }
+
+  if (m.role === "tool") {
+    // 后端把工具结果以 role='tool' 落库（旧数据是带标记的 user 消息）。
+    // 界面上它是中性的执行结果，不是「你」说的话。
+    const segs = splitToolResults(m.content || "");
+    return (
+      <article className="msg msg-tool" data-testid="msg-tool">
+        <div className="msg-label">工具结果 · {formatTime(m.created_at)}</div>
+        <div className="msg-body">
+          {segs.map((s, i) =>
+            s.kind === "text" ? (
+              <span key={i}>{s.text}</span>
+            ) : (
+              <ToolResultCard key={i} block={s} />
+            ),
+          )}
+        </div>
+      </article>
+    );
   }
 
   if (m.role === "user") {
@@ -220,16 +243,6 @@ export function Message({
           </button>
         </div>
       )}
-      <div className="msg-tools">
-        <button className="btn btn-ghost btn-xs" title="复制正文" onClick={() => void copyAll()}>
-          {copied ? "已复制" : "复制"}
-        </button>
-        {isLastAi && onRegenerate && (
-          <button className="btn btn-ghost btn-xs" title="重新生成" data-testid="regen-btn" onClick={onRegenerate}>
-            重新生成
-          </button>
-        )}
-      </div>
       {m.thinking ? (
         <details className="thinking" data-testid="thinking">
           <summary>思考 {m.thinking.length} 字 · 点击展开</summary>
@@ -261,12 +274,25 @@ export function Message({
             >
               <span className="source-n">[{s.n}]</span>
               <span className="grow truncate">{s.title || s.url}</span>
-              {s.provider && <span className="tiny faint">{s.provider}</span>}
+              {s.provider_label || s.provider ? (
+                <span className="tiny faint">{s.provider_label || s.provider}</span>
+              ) : null}
             </a>
           ))}
         </div>
       )}
       {usage && <div className="usage-line">{usage}</div>}
+      {/* 操作条放正文之后：先读完再复制/重生成，也避免悬停区压在开头 */}
+      <div className="msg-tools">
+        <button className="btn btn-ghost btn-xs" title="复制正文" onClick={() => void copyAll()}>
+          {copied ? "已复制" : "复制"}
+        </button>
+        {isLastAi && onRegenerate && (
+          <button className="btn btn-ghost btn-xs" title="重新生成" data-testid="regen-btn" onClick={onRegenerate}>
+            重新生成
+          </button>
+        )}
+      </div>
     </article>
   );
 }

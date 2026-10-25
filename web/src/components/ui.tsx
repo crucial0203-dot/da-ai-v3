@@ -36,7 +36,7 @@ export function ModalHost() {
             if (e.target === e.currentTarget) close();
           }}
         >
-          <div className={`modal ${spec.wide ? "wide" : ""}`} data-testid="modal">
+          <div className={`modal ${spec.wide ? "wide" : ""}${spec.full ? " full" : ""}`} data-testid="modal">
             {spec.title ? <h3>{spec.title}</h3> : null}
             {spec.body}
             {spec.actions?.length ? (

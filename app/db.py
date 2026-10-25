@@ -464,7 +464,10 @@ CREATE TABLE IF NOT EXISTS artifacts (
   html TEXT NOT NULL DEFAULT '',
   version INTEGER NOT NULL DEFAULT 1,
   parent_id TEXT,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  -- 可见正文字符数（去标签/CSS/JS）。列表与卡片展示字数用，避免把
+  -- 标记和样式也算成「字」。老数据迁移时按 html 长度回填近似值。
+  chars INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_artifact_task ON artifacts(task_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_artifact_user ON artifacts(user_id, created_at DESC);
@@ -743,6 +746,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
         or not column_exists(conn, "messages", "stopped")
         or not column_exists(conn, "messages", "parent_id")
         or not column_exists(conn, "messages", "branch_index")
+        or not column_exists(conn, "artifacts", "chars")
     )
     try:
         if pending:
@@ -793,6 +797,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
             MIGRATIONS["added"].append("messages.parent_id")
         if _ensure_column(conn, "messages", "branch_index", "INTEGER"):
             MIGRATIONS["added"].append("messages.branch_index")
+        # 制品字数：可见正文字符数。老行没有原文来源，按整份文档长度近似回填；
+        # 新写入由 artifacts.create_artifact/create_version 精确计算。
+        if _ensure_column(conn, "artifacts", "chars", "INTEGER NOT NULL DEFAULT 0"):
+            conn.execute("UPDATE artifacts SET chars = LENGTH(html) WHERE chars = 0")
+            conn.commit()
+            MIGRATIONS["added"].append("artifacts.chars")
         # P1-9：记忆变更三态。apply_ops 每执行一个操作就把结果写回这一列
         # （added=新增 / updated=更新 / existing=去重命中未写入），记忆页
         # 由此显示徽标；老行 NULL 表示这轮之前写的，不显示徽标。

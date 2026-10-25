@@ -1,7 +1,6 @@
 /** 应用壳：侧栏（品牌/搜索/导航/历史/用量+主题）+ 顶栏 + 路由出口。 */
 import { useCallback, useEffect, useMemo, useState, type UIEvent } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router";
-import { api } from "../lib/api";
 import { formatTime } from "../lib/format";
 import QuotaBanner from "./QuotaBanner";
 import { useSession, type Theme } from "../store/app";
@@ -26,14 +25,13 @@ const PAGE = 50;
  *  根节点 data-testid="usage-bar" 由 QuotaBanner 保留，验收脚本靠它找。 */
 function UsageBar() {
   const me = useSession((s) => s.me);
-  const [usage, setUsage] = useState<{ used: number; quota: number } | null>(null);
+  const usage = useSession((s) => s.quota);
+  const refreshUsage = useSession((s) => s.refreshUsage);
 
+  // 登录态变化时拉一次；对话结束后由 Task 页的 onEnd 再刷新（refreshUsage）
   useEffect(() => {
-    if (!me || me.role !== "visitor") return;
-    void api<{ quota: { used: number; quota: number } }>("/api/usage")
-      .then((d) => setUsage(d.quota))
-      .catch(() => setUsage(null));
-  }, [me]);
+    if (me?.role === "visitor") void refreshUsage();
+  }, [me, refreshUsage]);
 
   if (!usage || !usage.quota) return null;
   return <QuotaBanner used={usage.used} quota={usage.quota} />;

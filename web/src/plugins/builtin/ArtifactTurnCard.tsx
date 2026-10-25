@@ -16,8 +16,18 @@ interface ArtifactRow {
   created_at: string;
 }
 
-function ArtifactTurnCard({ task }: { task?: { id?: string } | null }) {
+interface ArtifactTurnCardProps {
+  task?: { id?: string; updated_at?: string } | null;
+  /** 宿主透传的消息流；用它算「这一回合有没有新增内容」的刷新戳 */
+  messages?: Array<{ id?: string | number }>;
+}
+
+function ArtifactTurnCard({ task, messages }: ArtifactTurnCardProps) {
   const taskId = String(task?.id || "");
+  // taskId 在会话里不变：只盯它的话，本轮新建的制品要等重新进页面才出现。
+  // 用「消息条数 + 末条 id + updated_at」当刷新戳，每轮结束都会变。
+  const lastId = messages?.length ? String(messages[messages.length - 1]?.id ?? "") : "";
+  const stamp = `${task?.updated_at || ""}|${messages?.length || 0}|${lastId}`;
   const [rows, setRows] = useState<ArtifactRow[]>([]);
   useEffect(() => {
     if (!taskId) return;
@@ -30,7 +40,8 @@ function ArtifactTurnCard({ task }: { task?: { id?: string } | null }) {
     return () => {
       alive = false;
     };
-  }, [taskId]);
+    // stamp 只用来触发重取，不参与请求
+  }, [taskId, stamp]);
 
   if (!taskId || rows.length === 0) return null;
   // 只亮最新一张（列表按 created_at DESC），其余在制品库看

@@ -15,11 +15,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import html as html_lib
 import ipaddress
 import re
 import socket
 from dataclasses import dataclass, field
-from urllib.parse import quote_plus, urljoin, urlparse
+from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
 
 from .. import config
 
@@ -76,6 +78,15 @@ _STOP_EN = {"a", "an", "the", "is", "are", "am", "do", "does", "did",
             "my", "i", "we", "it", "that", "this", "can", "could", "please"}
 
 
+# 剥 markdown 记号、引号、句末标点。
+# 用「字符集变量 + re.escape」拼正则：直接写含引号的 raw 串，
+# 相邻片段一旦漏掉 r 前缀，\s 就会变成无效转义（SyntaxWarning）。
+_TAIL_CHARS = "*_`#>~[]()「」『』\"'！!。.,，、;；:：?？"
+_HEAD_CHARS = "*_`#>~[]()「」『』\"'，,、;；:："
+_TAIL_MARKS = re.compile("[" + re.escape(_TAIL_CHARS) + r"\s]+$")
+_HEAD_MARKS = re.compile("^[" + re.escape(_HEAD_CHARS) + r"\s]+")
+
+
 def clean_query(text: str) -> str | None:
     """把用户消息清洗成搜索词。
 
@@ -87,9 +98,8 @@ def clean_query(text: str) -> str | None:
     s = unicodedata.normalize("NFKC", text or "").strip()
     if not s:
         return None
-    # 剥 markdown 记号、引号、句末标点
-    s = re.sub(r"[*_`#>~\[\]()「」『』""''\"'！!。.,，、;；:：?？\s]+$", "", s)
-    s = re.sub(r"^[*_`#>~\[\]()「」『』""''\"'，,、;；:：\s]+", "", s)
+    s = _TAIL_MARKS.sub("", s)
+    s = _HEAD_MARKS.sub("", s)
     # 迭代剥外壳（「麻烦你帮我查一下PPT」两层模板）
     for _ in range(4):
         before = s
@@ -167,6 +177,14 @@ def safe_url(url: str) -> bool:
 
 
 # ---- Provider 选择 ----
+
+_PROVIDER_LABELS = {"bocha": "博查", "zhipu": "智谱", "bing_html": "Bing 网页"}
+
+
+def provider_label(provider_id: str) -> str:
+    """provider id → 给人看的中文名。前端来源列表不该直接显示 bing_html。"""
+    return _PROVIDER_LABELS.get(provider_id, provider_id)
+
 
 def available_providers() -> list[dict]:
     """返回各 provider 的可用状态（供 /__net 诊断与前端展示）。"""
@@ -293,17 +311,45 @@ _BING_LINK = re.compile(r'<h2[^>]*>\s*<a[^>]*href="(https?://[^"]+)"[^>]*>(.*?)<
 _BING_SNIPPET = re.compile(r'<p[^>]*>(.*?)</p>', re.S)
 _TAG = re.compile(r"<[^>]+>")
 # 摘要里的代码/脚手架痕迹（宁缺勿滥：脏摘要不如没有摘要）
-_CODE_TRACE = re.compile(r"function\s*\(|=>|\{[" "\w$]*:|;\s*var\s+|typeof\s+|undefined|window\.|\bvar\s+\w+\s*=")
+_CODE_TRACE = re.compile(
+    r"function\s*\(|=>|\{[" r"\w$]*:|;\s*var\s+|typeof\s+|undefined|window\.|\bvar\s+\w+\s*="
+)
 # 先剥脚本再找 <p>，否则 Bing 内联 JS 会被当摘要
 _SCRIPT_BLOCK = re.compile(r"(?is)<(script|style|noscript)[^>]*>.*?</\1>")
 
 def _strip_tags(html: str) -> str:
     text = _TAG.sub(" ", html or "")
-    text = (text.replace("&nbsp;", " ").replace("&amp;", "&")
-            .replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"')
-            .replace("&apos;", "'").replace("&#39;", "'").replace("&#x27;", "'")
-            .replace("&ensp;", " ").replace("&emsp;", " ").replace("&#0183;", "·"))
+    # 用标准库解实体：Bing 摘要里会出现 &#242; 这类数字实体，
+    # 手写 replace 只覆盖了十来个命名实体，剩下的会原样显示成乱码。
+    text = html_lib.unescape(text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _unwrap_bing(url: str) -> str:
+    """还原 Bing 的跳转链。
+
+    Bing 搜索结果常把真实地址包成
+    `https://www.bing.com/ck/a?...&u=a1<base64url>`；直接把外层链接存下来，
+    前端来源列表和正文抓取都会拿到 Bing 的中间页，而不是原文。
+    `u` 参数以 a1 开头，后面是目标 URL 的 base64url 编码。
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return url
+    host = (parsed.hostname or "").lower()
+    if not host.endswith("bing.com") or parsed.path != "/ck/a":
+        return url
+    value = (parse_qs(parsed.query).get("u") or [""])[0]
+    if not value.startswith("a1"):
+        return url
+    payload = value[2:]
+    try:
+        raw = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
+        target = raw.decode("utf-8", "ignore").strip()
+    except (ValueError, TypeError):
+        return url
+    return target if target.startswith(("http://", "https://")) else url
 
 
 async def _search_bing(query: str, top_k: int) -> list[SearchHit]:
@@ -311,7 +357,7 @@ async def _search_bing(query: str, top_k: int) -> list[SearchHit]:
     html = await _http_get(url)
     hits: list[SearchHit] = []
     for match in _BING_LINK.finditer(html):
-        link = match.group(1)
+        link = _unwrap_bing(match.group(1))
         title = _strip_tags(match.group(2))
         if not title or not safe_url(link):
             continue
@@ -358,6 +404,23 @@ async def _enrich(hit: SearchHit) -> None:
         hit.body = ""
 
 
+def _dedupe(hits: list[SearchHit]) -> list[SearchHit]:
+    """按 URL 去重（去掉片段与末尾斜杠）。
+
+    Bing/Bocha 的首页结果常有同一篇文章的不同入口（移动版、跳转链还原后
+    重复），不去重会让来源列表出现两三条一模一样的链接。
+    """
+    seen: set[str] = set()
+    out: list[SearchHit] = []
+    for hit in hits:
+        key = (hit.url or "").strip().split("#", 1)[0].rstrip("/")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(hit)
+    return out
+
+
 # ---- 对外主入口 ----
 
 async def search(query: str, top_k: int | None = None) -> tuple[list[SearchHit], str]:
@@ -373,25 +436,30 @@ async def search(query: str, top_k: int | None = None) -> tuple[list[SearchHit],
     provider = pick_provider()
 
     hits = await _search(provider["id"], query, top_k)
+    hits = _dedupe(hits)
     for index, hit in enumerate(hits):
         hit.n = index + 1
 
-    # 并发抓正文，但总量封顶
-    budget = config.WEB_SEARCH_MAX_TOTAL_CHARS
-    async def one(hit: SearchHit) -> None:
-        nonlocal budget
-        if budget <= 0:
-            return
+    # 并发抓正文，但总量封顶。
+    #
+    # 先一起抓、再按排名顺序分配预算：原实现是各协程边抓边扣同一个
+    # budget，谁先返回谁先占满——排名第一的结果反而可能一个字都分不到，
+    # 而且结果随网络时序变来变去。现在分配是确定性的：预算优先给排名高的。
+    async def body_of(url: str) -> str:
         try:
-            body = await fetch_body(hit.url)
+            return await fetch_body(url)
         except Exception:
-            body = ""
-        if body:
-            body = body[:min(len(body), budget, config.WEB_SEARCH_MAX_PAGE_CHARS)]
-            budget -= len(body)
-        hit.body = body
+            return ""
 
-    await asyncio.gather(*(one(h) for h in hits), return_exceptions=True)
+    bodies = await asyncio.gather(*(body_of(h.url) for h in hits))
+    budget = config.WEB_SEARCH_MAX_TOTAL_CHARS
+    for hit, body in zip(hits, bodies):
+        if not body or budget <= 0:
+            hit.body = ""
+            continue
+        take = min(len(body), budget, config.WEB_SEARCH_MAX_PAGE_CHARS)
+        hit.body = body[:take]
+        budget -= take
     return hits, provider["id"]
 
 
@@ -410,8 +478,15 @@ def format_results(hits: list[SearchHit]) -> str:
 
 
 def sources_payload(hits: list[SearchHit]) -> list[dict]:
-    """落库用的精简来源列表。"""
+    """落库用的精简来源列表。
+
+    provider 同时给 id 与中文名：老前端读 provider，新前端优先读
+    provider_label，不会把 bing_html 这种内部 id 直接显示给用户。
+    """
     return [
-        {"n": h.n, "title": h.title, "url": h.url, "provider": h.provider}
+        {
+            "n": h.n, "title": h.title, "url": h.url,
+            "provider": h.provider, "provider_label": provider_label(h.provider),
+        }
         for h in hits
     ]

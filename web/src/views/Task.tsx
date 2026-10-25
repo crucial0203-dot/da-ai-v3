@@ -79,6 +79,8 @@ interface LiveTool {
 interface ToolPending {
   name: string;
   input: Record<string, unknown>;
+  /** 审批跨请求：执行结果回注时用它和原工具卡对上 */
+  call_id?: string;
   reason?: string;
   label?: string;
   kind?: ToolKind;
@@ -96,7 +98,7 @@ interface Live {
   images: number;
   imagesDropped: number;
   usage: string;
-  sources: Array<{ n: number; title: string; url: string; provider?: string }>;
+  sources: Array<{ n: number; title: string; url: string; provider?: string; provider_label?: string }>;
   tools: LiveTool[];
   toolPending: ToolPending | null;
   resumed: string;
@@ -197,6 +199,7 @@ function applyLiveEvent(
       next.toolPending = {
         ...(keep || {}),
         name,
+        call_id: callId || keep?.call_id,
         input: (data.input as Record<string, unknown>) || keep?.input || {},
       } as ToolPending;
     }
@@ -208,6 +211,7 @@ function applyLiveEvent(
       : [];
     next.toolPending = {
       name: String(data.name || ""),
+      call_id: data.call_id ? String(data.call_id) : undefined,
       input: (data.input as Record<string, unknown>) || {},
       reason: data.reason ? String(data.reason) : undefined,
       label: data.label ? String(data.label) : undefined,
@@ -239,7 +243,7 @@ interface ArtifactRowData {
 
 export default function Task() {
   const { id = "" } = useParams();
-  const { meta, me, refreshTasks } = useSession();
+  const { meta, me, refreshTasks, refreshUsage } = useSession();
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [loadError, setLoadError] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -407,12 +411,14 @@ export default function Task() {
             setLive((cur) => (cur?.toolPending ? cur : null));
             void reload();
             void refreshTasks();
+            // 这一轮真实消耗了调用次数，额度条要跟着走
+            void refreshUsage();
           }, 400);
           timersRef.current.add(timer);
         },
       });
     },
-    [id, streaming, persistParams, reload, refreshTasks, scrollToBottom],
+    [id, streaming, persistParams, reload, refreshTasks, refreshUsage, scrollToBottom],
   );
   // 首页派发：进页自动发首条
   useEffect(() => {
@@ -463,7 +469,7 @@ export default function Task() {
     try {
       const res = await api<{ ok: boolean; approved: boolean; name: string; resumed?: string }>(
         `/api/tasks/${id}/tool-approve`,
-        { method: "POST", body: { name: pending.name, input: pending.input, approved } },
+        { method: "POST", body: { name: pending.name, input: pending.input, call_id: pending.call_id, approved } },
       );
       setDetail((d) => (d ? { ...d, tool_pending: null } : d));
       if (!approved) {
@@ -491,6 +497,8 @@ export default function Task() {
         setLive(null);
         void reload();
         void refreshTasks();
+        // 审批续跑同样是一次模型调用
+        void refreshUsage();
       }, 600);
     } catch (err) {
       setApprovalState("request");
@@ -833,6 +841,11 @@ const artWords = artTool?.chars ?? live?.answer.length ?? 0;
       {nodes.length > 0 && (
         <aside className="task-rail" data-testid="node-rail">
           <div className="rail-title">阶段</div>
+          {nodes.every((n) => n.status === "pending") && (
+            <div className="tiny faint" data-testid="nodes-not-started" style={{ marginBottom: 8 }}>
+              流程尚未开始：点右侧「生成文件」会依次跑完这些阶段。
+            </div>
+          )}
           {nodes.map((n) => (
             <div
               key={n.key}
@@ -842,7 +855,7 @@ const artWords = artTool?.chars ?? live?.answer.length ?? 0;
               onClick={() => n.status === "failed" && void retryNode(n.key)}
             >
               <span className="node-dot" />
-              <span>{FLOW_LABELS[n.key] || n.label}</span>
+              <span>{n.label || FLOW_LABELS[n.key] || n.key}</span>
               {n.attempt > 1 && <span className="node-detail">重试 {n.attempt - 1} 次</span>}
             </div>
           ))}
@@ -945,7 +958,9 @@ const artWords = artTool?.chars ?? live?.answer.length ?? 0;
                     <a key={s.n} className="source-item" href={s.url} target="_blank" rel="noreferrer noopener" title={s.url}>
                       <span className="source-n">[{s.n}]</span>
                       <span className="grow truncate">{s.title || s.url}</span>
-                      {s.provider && <span className="tiny faint">{s.provider}</span>}
+                      {s.provider_label || s.provider ? (
+                        <span className="tiny faint">{s.provider_label || s.provider}</span>
+                      ) : null}
                     </a>
                   ))}
                 </div>
@@ -1118,7 +1133,13 @@ const artWords = artTool?.chars ?? live?.answer.length ?? 0;
             {genBusy ? <StateDot status="running" /> : null} 生成文件
           </button>
           <div>
-            {deliverables.length === 0 && <p className="tiny faint" style={{ marginTop: 8, marginBottom: 0 }}>暂无文件</p>}
+            {deliverables.length === 0 && (
+              <p className="tiny faint" style={{ marginTop: 8, marginBottom: 0 }}>
+                {artifacts.length > 0
+                  ? "还没有正式文件。下方「预览制品」是网页稿，不是 .pptx/.docx 文件；需要正式文件请点「生成文件」。"
+                  : "暂无文件"}
+              </p>
+            )}
             {[...deliverables].reverse().map((f) => (
               <DeliverableCard
                 key={f.id}
@@ -1131,9 +1152,12 @@ const artWords = artTool?.chars ?? live?.answer.length ?? 0;
         {artifacts.length > 0 && (
           <div className="aside-block">
             <div className="aside-head">
-              <span>Artifacts</span>
+              <span>预览制品</span>
               <span className="faint">{artifacts.length} 件</span>
             </div>
+            <p className="tiny faint" style={{ margin: "0 0 8px" }}>
+              网页预览，可全屏查看或下载 HTML；不是 Word/PPT 文件。
+            </p>
             {[...artifacts].reverse().map((a) => (
               <ArtifactCard
                 key={a.id}

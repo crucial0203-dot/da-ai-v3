@@ -133,6 +133,8 @@ export interface ModalSpec {
   title: React.ReactNode;
   body: React.ReactNode;
   wide?: boolean;
+  /** 全屏级弹窗（制品预览等）：宽度接近视口，高度吃掉剩余空间 */
+  full?: boolean;
   actions?: Array<{ label: string; kind?: string; onClick?: (close: () => void) => void }>;
 }
 interface ModalState {
@@ -175,12 +177,15 @@ interface SessionState {
   theme: Theme;
   booted: boolean;
   authRequired: boolean;
+  /** 今日额度（额度条数据源）。每轮对话/审批后要重新拉，否则一直停在登录时的数字 */
+  quota: { used: number; quota: number } | null;
   /** 全局命令面板（mod+k）开关 */
   paletteOpen: boolean;
   setPaletteOpen: (v: boolean) => void;
   setTheme: (t: Theme) => void;
   boot: () => Promise<void>;
   refreshTasks: () => Promise<void>;
+  refreshUsage: () => Promise<void>;
   reloadMe: () => Promise<void>;
   logout: () => Promise<void>;
 }
@@ -201,6 +206,7 @@ export const useSession = create<SessionState>((set, get) => ({
   theme: initialTheme(),
   booted: false,
   authRequired: false,
+  quota: null,
   paletteOpen: false,
   setPaletteOpen: (v) => set({ paletteOpen: v }),
 
@@ -223,7 +229,7 @@ export const useSession = create<SessionState>((set, get) => ({
         applyTheme(me.pref_theme as Theme);
         set({ theme: me.pref_theme as Theme });
       }
-      set({ meta, me, booted: true, authRequired: false });
+      set({ meta, me, booted: true, authRequired: false, quota: me.quota ?? null });
       // 刷新任务列表不阻塞 boot——否则 onDone 的导航会迟到，
       // 把用户在登录完成瞬间点开的页面拽回首页（2026-02 线上插件页竞态 bug）
       void get().refreshTasks();
@@ -252,14 +258,29 @@ export const useSession = create<SessionState>((set, get) => ({
     }
   },
 
+  refreshUsage: async () => {
+    const { me } = get();
+    // 管理员没有每日额度；别为了一条不显示的横幅白打一次接口
+    if (!me || me.role !== "visitor") {
+      set({ quota: me?.quota ?? null });
+      return;
+    }
+    try {
+      const data = await api<{ quota: { used: number; quota: number } }>("/api/usage");
+      set({ quota: data.quota });
+    } catch {
+      // 额度条是辅助信息，刷新失败不打断主流程，保留上一次的数字
+    }
+  },
+
   reloadMe: async () => {
     const me = await api<Me>("/api/me");
-    set({ me });
+    set({ me, quota: me.quota ?? get().quota });
   },
 
   logout: async () => {
     await api("/api/auth/logout", { method: "POST" }).catch(() => undefined);
-    set({ me: null, tasks: [], authRequired: true });
+    set({ me: null, tasks: [], authRequired: true, quota: null });
   },
 }));
 

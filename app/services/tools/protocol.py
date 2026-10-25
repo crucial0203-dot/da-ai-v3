@@ -174,6 +174,8 @@ def format_result(name: str, payload: Any, call_id: str = "") -> str:
     """工具结果回注格式。
 
     用独立标记块，模型能明确区分「工具结果」与「用户说的话」。
+    call_id 与 SSE `tool` 事件的 call_id 对齐，一条调用与一条结果能对上；
+    缺失时留空（历史数据/审批路径可能拿不到）。
     """
     if isinstance(payload, str):
         body = payload

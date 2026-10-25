@@ -121,7 +121,12 @@ def _persist_tool_exchange(task_id: str, call_text: str, result_text: str,
 
     两条消息都写：
     - assistant 那条是模型的工具调用块（content 里含 ```tool 围栏）；
-    - user 那条是 `<<<TOOL_RESULT ...>>>` 回注块。
+    - tool 那条是 `<<<TOOL_RESULT ...>>>` 回注块。
+
+    回注用 role='tool' 而不是 'user'：它是工具执行结果，不是用户发言。
+    前端据此不把它渲染成用户气泡，regenerate/continue 也不会把它当成
+    用户提问（那会拿工具结果去重跑模型）。发给模型时仍在
+    history_messages 里映射回 user 角色——文本协议没有原生 tool 通道。
 
     两条都标 status='done'，才能进下一轮的历史上下文——
     否则模型下一轮就「忘了」自己刚调过什么工具。
@@ -147,7 +152,7 @@ def _persist_tool_exchange(task_id: str, call_text: str, result_text: str,
             vals,
         )
         conn.execute(
-            "INSERT INTO messages(task_id, role, content, status, created_at) VALUES(?, 'user', ?, 'done', ?)",
+            "INSERT INTO messages(task_id, role, content, status, created_at) VALUES(?, 'tool', ?, 'done', ?)",
             (task_id, result_text, now),
         )
 
@@ -185,6 +190,8 @@ def history_messages(task_id: str, keep_thinking: bool,
             blocks.append({"type": "text", "text": row["content"]})
             messages.append({"role": "assistant", "content": blocks})
         else:
+            # role='tool' 是工具结果回注。文本协议没有原生 tool 通道，
+            # 发给模型时仍按 user 角色送，靠 <<<TOOL_RESULT>>> 标记区分。
             messages.append({"role": "user", "content": [{"type": "text", "text": row["content"]}]})
     return messages
 
@@ -193,10 +200,11 @@ def _history_turns(messages: list[dict], reuse_message_id: int | None) -> int:
     """本轮之前的**对话轮次**数（上下文压力条的历史段）。
 
     口径说明：
-      - 只数**用户真实发言**。工具结果回注（<<<TOOL_RESULT>>>）也是一条
-        user 消息，但它是上一轮工具执行的产物，不是独立的一轮对话——
+      - 只数**用户真实发言**。工具结果回注（role='tool'，正文是
+        <<<TOOL_RESULT>>> 块）是上一轮工具执行的产物，不是独立的一轮对话——
         按消息条数算的话，「用过一次工具」会显示成「历史 ×2」，用户在
         这个数字上判断上下文长度会被误导。
+      - 历史上回注曾以 role='user' 落库，所以额外用正文标记兜底排除。
       - 本轮自己的 user 消息不计入（reuse_message_id 非空时它已经在
         messages 里，重生成不额外扣一次）。
     """
@@ -238,6 +246,16 @@ async def tool_approve(task_id: str, request: Request):
     name = str(payload.get("name") or "")
     tool_input = payload.get("input") or {}
     approved = bool(payload.get("approved"))
+    # 审批跨了 HTTP 请求，call_id 只能由前端带回来（SSE approval 事件里有）。
+    # 老前端不回传时，退回落库的 tool_pending 里那份，保证回注和原工具卡对得上。
+    call_id = str(payload.get("call_id") or "")
+    if not call_id and db.has_column("tasks", "tool_pending"):
+        try:
+            stored = json.loads(task["tool_pending"] or "{}")
+            if isinstance(stored, dict):
+                call_id = str(stored.get("call_id") or "")
+        except (KeyError, IndexError, json.JSONDecodeError, TypeError):
+            call_id = ""
     if not name:
         raise HTTPException(status_code=400, detail="缺少工具名")
 
@@ -248,18 +266,18 @@ async def tool_approve(task_id: str, request: Request):
             approved=True,
         )
         payload_text = (
-            tools_service.protocol.format_result(name, tool_result.output)
+            tools_service.protocol.format_result(name, tool_result.output, call_id)
             if tool_result.ok
-            else tools_service.protocol.format_error(name, tool_result.error)
+            else tools_service.protocol.format_error(name, tool_result.error, call_id)
         )
     else:
         payload_text = tools_service.protocol.format_error(
-            name, "用户拒绝了这个工具的调用，请用现有信息回答，不要重试这个工具")
+            name, "用户拒绝了这个工具的调用，请用现有信息回答，不要重试这个工具", call_id)
 
     with db.tx() as conn:
         conn.execute(
             "INSERT INTO messages(task_id, role, content, status, created_at) "
-            "VALUES(?, 'user', ?, 'done', ?)",
+            "VALUES(?, 'tool', ?, 'done', ?)",
             (task_id, payload_text, db.now_iso()),
         )
         # 审批已处理，清掉待办标记
@@ -417,15 +435,20 @@ async def regenerate(task_id: str, request: Request):
         raise HTTPException(status_code=403, detail="无权访问这个任务")
     deps.limit_chat(user["id"])
 
+    # 工具调用块也是 assistant 消息，但它不是「回复」——排除掉，
+    # 否则最后一轮工具跑完没有总结时，重生成会把工具块当回复重跑。
     last = db.one(
         "SELECT * FROM messages WHERE task_id = ? AND role = 'assistant' AND status = 'done' "
-        "ORDER BY id DESC LIMIT 1", (task_id,),
+        "AND content NOT LIKE '%```tool%' ORDER BY id DESC LIMIT 1", (task_id,),
     )
     if not last:
         raise HTTPException(status_code=404, detail="还没有可重新生成的回复")
+    # 回注现在是 role='tool'，不会命中；老数据回注仍是 role='user'，
+    # 用正文标记兜底排除，免得拿工具结果当用户提问重跑。
     user_row = db.one(
         "SELECT * FROM messages WHERE task_id = ? AND role = 'user' AND id < ? "
-        "ORDER BY id DESC LIMIT 1", (task_id, last["id"]),
+        "AND content NOT LIKE '%<<<TOOL_RESULT%' ORDER BY id DESC LIMIT 1",
+        (task_id, last["id"]),
     )
     if not user_row:
         raise HTTPException(status_code=404, detail="找不到这条回复对应的提问")
@@ -549,7 +572,8 @@ async def continue_stopped(task_id: str, request: Request):
     # 续跑的检索 query 用它前面那条 user 消息：拿半截残句当 query 会搜出碎渣
     user_row = db.one(
         "SELECT * FROM messages WHERE task_id = ? AND role = 'user' AND id < ? "
-        "ORDER BY id DESC LIMIT 1", (task_id, stopped_row["id"]),
+        "AND content NOT LIKE '%<<<TOOL_RESULT%' ORDER BY id DESC LIMIT 1",
+        (task_id, stopped_row["id"]),
     )
     if not user_row:
         raise HTTPException(status_code=404, detail="找不到这条回复对应的提问")
@@ -946,6 +970,7 @@ async def _chat_stream(user, task, payload, call_id: str,
                     if tool_result.needs_approval:
                         pending_approval = {
                             "name": call.name, "input": call.input,
+                            "call_id": tool_call_ids.get(call.name, ""),
                             "reason": tool_result.meta.get("reason", ""),
                         }
                         # 落到任务上：刷新页面后前端还能看到「有个工具在等你批准」
@@ -956,6 +981,7 @@ async def _chat_stream(user, task, payload, call_id: str,
                             )
                         yield sse("approval", {
                             "name": call.name,
+                            "call_id": tool_call_ids.get(call.name, ""),
                             "label": tools_service.kinds.label_of(call.name),
                             "kind": tools_service.kinds.kind_of(call.name),
                             "risk": _approval_risk(call.name),
@@ -978,13 +1004,14 @@ async def _chat_stream(user, task, payload, call_id: str,
                         "ok": tool_result.ok,
                         "error": tool_result.error,
                     })
+                    result_call_id = tool_call_ids.get(call.name, "")
                     if not tool_result.ok:
                         # 失败也回注，让模型自己降级
                         payload_text = tools_service.protocol.format_error(
-                            call.name, tool_result.error)
+                            call.name, tool_result.error, result_call_id)
                     else:
                         payload_text = tools_service.protocol.format_result(
-                            call.name, tool_result.output)
+                            call.name, tool_result.output, result_call_id)
                     # 工具调用块与回注都要落库：
                     # 不落的话刷新页面只剩最终答复，用户看不到「调了什么、拿到了什么」，
                     # 也没法在下一轮把工具结果当作上下文继续用。
@@ -995,8 +1022,13 @@ async def _chat_stream(user, task, payload, call_id: str,
                         model_id=resolved.spec.id,
                         usage=result.get("usage") or {},
                     )
+                    # 回注给模型的消息必须成对：assistant 的调用块 + user 的工具结果。
+                    # 只拼结果会让上下文出现「连续两条 user 消息」，模型分不清
+                    # 哪条是自己的调用、哪条是执行结果，也解释了「工具结果裸奔」。
                     loop_messages = list(loop_messages) + [
-                        {"role": "user", "content": [{"type": "text", "text": payload_text}]}
+                        {"role": "assistant",
+                         "content": [{"type": "text", "text": result.get("text") or ""}]},
+                        {"role": "user", "content": [{"type": "text", "text": payload_text}]},
                     ]
                     rounds += 1
                     if rounds >= config.MAX_TOOL_ROUNDS:

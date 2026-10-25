@@ -201,7 +201,7 @@ pre { font-family: var(--font-mono); }
   content: "▍"; color: var(--accent); animation: blink 1s steps(1) infinite;
 }
 @keyframes blink { 50% { opacity: 0; } }
-.msg-tools { display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; margin: 2px 0; }
+.msg-tools { display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; margin: 2px 0 0; }
 .msg:hover .msg-tools { opacity: 1; }
 .msg-error {
   margin-top: 8px; padding: 8px 12px; border-radius: 8px; font-size: var(--fs-13);
@@ -760,14 +760,16 @@ details.thinking, .md pre { scrollbar-width: thin; }
 .tool-group[open] > summary { border-bottom: 1px solid var(--line-soft); }
 
 /* ── 工具结果回注卡（Message.tsx ToolResultCard）──────────
-   后端把工具结果包成 <<<TOOL_RESULT>>> 块以 user 消息回注给模型，那是
-   线上格式不是用户言论：纯回注消息去掉用户气泡外观，改渲染成一行摘要卡，
-   默认折叠，展开看原始 JSON。修复前这里整块裸奔（库里已存 340 条）。 */
-.msg-user[data-pure-tool] { align-items: stretch; }
+   后端把工具结果包成 <<<TOOL_RESULT>>> 块回注给模型，那是线上格式不是
+   用户言论：纯回注消息去掉用户气泡外观，改渲染成一行摘要卡，默认折叠，
+   展开看原始 JSON。修复前这里整块裸奔（库里已存 340 条）。
+   新数据用 role='tool' 落库，旧数据仍是带标记的 role='user'，两种都认。 */
+.msg-tool .msg-body,
 .msg-user[data-pure-tool] .msg-body {
   background: none; padding: 0; max-width: 100%;
   display: flex; flex-direction: column; gap: 4px;
 }
+.msg-user[data-pure-tool] { align-items: stretch; }
 .tool-result-card {
   border: 1px solid var(--line-soft); border-radius: var(--radius);
   background: var(--surface-2); font-size: var(--fs-12);
@@ -799,6 +801,9 @@ details.thinking, .md pre { scrollbar-width: thin; }
 }
 .artifact-row { border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 8px 10px; margin-bottom: 8px; background: var(--surface); }
 .artifact-frame { width: 100%; height: 260px; border: 1px solid var(--line-soft); border-radius: 8px; margin-top: 8px; background: #fff; }
+/* 全屏预览弹窗：宽度接近视口，iframe 吃掉剩余高度 */
+.modal.full { width: min(1200px, 100%); max-height: 92dvh; }
+.artifact-frame-full { height: min(74dvh, 900px); margin-top: 0; }
 
 /* ── P1-7 制品卡：generating（微光+实时字数）/ done（标题+预览下载） ── */
 .artifact-card { border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 8px 10px; margin-bottom: 8px; background: var(--surface); }

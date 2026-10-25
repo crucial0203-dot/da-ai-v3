@@ -64,6 +64,19 @@ def _json_obj(raw) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
+# 标题落库前统一收拾：折叠空白、去掉句末标点、超长截断后再去一次标点。
+# 侧栏显示的是「标题」而不是半句话，结尾挂个「。」很突兀。
+_TITLE_TAIL = "。！？；：，、.!?;:,．"
+
+
+def _clean_title(raw: str, limit: int) -> str:
+    text = " ".join(str(raw or "").split())
+    text = text.strip().rstrip(_TITLE_TAIL).strip()
+    if len(text) > limit:
+        text = text[:limit].rstrip(_TITLE_TAIL).strip()
+    return text
+
+
 def _summary(row) -> dict:
     counts = db.one(
         "SELECT COUNT(*) AS total, SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS done, "
@@ -97,7 +110,7 @@ def create_task(payload: TaskIn, request: Request):
     user = deps.current_user(request)
     mode = payload.mode if payload.mode in MODES else "writing"
     goal = payload.goal.strip()
-    title = (payload.title or goal.split("\n")[0])[:24].strip() or "未命名任务"
+    title = _clean_title(payload.title or goal.split("\n")[0], 24) or "未命名任务"
     task_id = db.new_id("t_")
     # 新任务继承访客的默认模型，写进 params_json 当行为快照：
     # 之后改「默认模型」不会追溯改动已建任务，符合"参数快照"语义。
@@ -227,7 +240,7 @@ def patch_task(task_id: str, payload: TaskPatch, request: Request):
     fields, params = [], []
     if payload.title is not None:
         fields.append("title = ?")
-        params.append(payload.title.strip()[:40] or row["title"])
+        params.append(_clean_title(payload.title, 40) or row["title"])
     if payload.goal is not None:
         fields.append("goal = ?")
         params.append(payload.goal.strip()[:4000])

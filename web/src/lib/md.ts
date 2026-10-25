@@ -2,6 +2,7 @@
  * 自研 Markdown 渲染：先转义再解析，只放行白名单标签，杜绝模型输出注入。
  * 从旧前端 md.js 移植，规则不变。
  */
+import { labelOfTool } from "./toolKind";
 
 function escapeHtml(text: unknown): string {
   return String(text ?? "")
@@ -20,7 +21,13 @@ function inline(text: string): string {
   });
   out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   out = out.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
-  out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  // 链接放行两类：绝对 http(s) 与站内根相对路径（制品预览、任务页等）。
+  // 排除 `//host` 协议相对地址，避免指向站外；其余协议（javascript: 等）
+  // 不匹配，转义后连字符都变成实体，不会成为可执行 href。
+  out = out.replace(
+    /\[([^\]]+)\]\(((?:https?:\/\/|\/(?!\/))[^\s)]+)\)/g,
+    '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>',
+  );
   out = out.replace(/\u0000(\d+)\u0000/g, (_, i: string) => `<code>${codes[Number(i)]}</code>`);
   return out;
 }
@@ -71,7 +78,7 @@ export function renderMarkdown(src: unknown): string {
           /* 解析不了就只显示原始内容 */
         }
         html.push(
-          `<details class="tool-fence"><summary>⚙ 工具调用${toolName ? `：${escapeHtml(toolName)}` : ""}</summary>` +
+          `<details class="tool-fence"><summary title="${escapeHtml(toolName)}">⚙ 工具调用${toolName ? `：${escapeHtml(labelOfTool(toolName))}` : ""}</summary>` +
             `<pre class="tool-fence-body"><code>${escapeHtml(codeBody)}</code></pre></details>`,
         );
         continue;
