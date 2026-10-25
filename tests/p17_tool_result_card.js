@@ -99,23 +99,34 @@ async function testParser() {
   })());
 }
 
-/** Part B：浏览器——旧会话里不再出现裸 JSON 与内部标记 */
-async function testBrowser() {
-  console.log("\n-- B：浏览器渲染（真实工具回注） --");
+/** 邀请码加入。/api/join 有真实限流（同 IP 5 分钟 12 次），撞上就退避重试。 */
+async function joinSession(note, nickname) {
   const login = await fetch(BASE + "/api/admin/login", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ password: env("ADMIN_PASSWORD") }),
   });
   const adminCookie = (login.headers.get("set-cookie") || "").split(";")[0];
-  const inv = await fetch(BASE + "/api/admin/invites", {
-    method: "POST", headers: { "Content-Type": "application/json", Cookie: adminCookie },
-    body: JSON.stringify({ count: 1, max_uses: 5, days: 7, daily_quota: 30, note: "p17" }),
-  }).then((r) => r.json());
-  const ctx = await fetch(BASE + "/api/join", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code: inv.codes[0].toLowerCase(), nickname: "p17回注" }),
-  });
-  const cookie = (ctx.headers.get("set-cookie") || "").split(";")[0];
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const inv = await fetch(BASE + "/api/admin/invites", {
+      method: "POST", headers: { "Content-Type": "application/json", Cookie: adminCookie },
+      body: JSON.stringify({ count: 1, max_uses: 5, days: 7, daily_quota: 30, note }),
+    }).then((r) => r.json());
+    const ctx = await fetch(BASE + "/api/join", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: inv.codes[0].toLowerCase(), nickname }),
+    });
+    const cookie = (ctx.headers.get("set-cookie") || "").split(";")[0];
+    if (cookie) return cookie;
+    console.log(`  .. join 被限流（第 ${attempt} 次），退避 70s`);
+    await sleep(70000);
+  }
+  throw new Error("连续三次 join 都被限流");
+}
+
+/** Part B：浏览器——旧会话里不再出现裸 JSON 与内部标记 */
+async function testBrowser() {
+  console.log("\n-- B：浏览器渲染（真实工具回注） --");
+  const cookie = await joinSession("p17", "p17回注");
   const H = { "Content-Type": "application/json", Cookie: cookie };
   const task = await fetch(BASE + "/api/tasks", {
     method: "POST", headers: H, body: JSON.stringify({ mode: "writing", goal: "p17 回注卡" }),

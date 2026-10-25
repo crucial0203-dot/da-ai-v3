@@ -107,22 +107,43 @@ async function testConnectionRules() {
   check("空闲落点放行", checkConnection(open, "l1", "g1") === null);
 }
 
-/** 建工作流 + 拿浏览器会话（复用 p11 的 API 建图 → cookie 注入套路）。 */
-async function setupCanvas(page, graph, name) {
+/** 登录拿 cookie（邀请码加入）。
+ *
+ * /api/join 有真实限流（deps.limit_join：同 IP 5 分钟 12 次）——一次跑里 join
+ * 三次、加上反复重跑，会把自己撞进 429（表现为「请先用邀请码进入」，
+ * 因为拿不到 set-cookie）。所以：整个套件共用一个会话，且 429 时退避重试。
+ */
+let SESSION = null;
+async function getSession() {
+  if (SESSION) return SESSION;
   const login = await fetch(BASE + "/api/admin/login", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ password: env("ADMIN_PASSWORD") }),
   });
   const adminCookie = (login.headers.get("set-cookie") || "").split(";")[0];
-  const inv = await fetch(BASE + "/api/admin/invites", {
-    method: "POST", headers: { "Content-Type": "application/json", Cookie: adminCookie },
-    body: JSON.stringify({ count: 1, max_uses: 5, days: 7, daily_quota: 30, note: "p16" }),
-  }).then((r) => r.json());
-  const ctx = await fetch(BASE + "/api/join", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code: inv.codes[0].toLowerCase(), nickname: "p16甲" }),
-  });
-  const cookie = (ctx.headers.get("set-cookie") || "").split(";")[0];
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const inv = await fetch(BASE + "/api/admin/invites", {
+      method: "POST", headers: { "Content-Type": "application/json", Cookie: adminCookie },
+      body: JSON.stringify({ count: 1, max_uses: 5, days: 7, daily_quota: 30, note: "p16" }),
+    }).then((r) => r.json());
+    const ctx = await fetch(BASE + "/api/join", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: inv.codes[0].toLowerCase(), nickname: "p16甲" }),
+    });
+    const cookie = (ctx.headers.get("set-cookie") || "").split(";")[0];
+    if (cookie) {
+      SESSION = cookie;
+      return cookie;
+    }
+    console.log(`  .. join 被限流（第 ${attempt} 次），退避 70s`);
+    await sleep(70000);
+  }
+  throw new Error("连续三次 join 都被限流");
+}
+
+/** 建工作流 + 拿浏览器会话（复用 p11 的 API 建图 → cookie 注入套路）。 */
+async function setupCanvas(page, graph, name) {
+  const cookie = await getSession();
   const H = { "Content-Type": "application/json", Cookie: cookie };
   const created = await fetch(BASE + "/api/workflows", {
     method: "POST", headers: H, body: JSON.stringify({ name, graph }),
@@ -261,20 +282,7 @@ async function testCanvasBrowser() {
 
 async function testMarket() {
   console.log("\n-- C：市场 218 卡 + content-visibility --");
-  const login = await fetch(BASE + "/api/admin/login", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password: env("ADMIN_PASSWORD") }),
-  });
-  const adminCookie = (login.headers.get("set-cookie") || "").split(";")[0];
-  const inv = await fetch(BASE + "/api/admin/invites", {
-    method: "POST", headers: { "Content-Type": "application/json", Cookie: adminCookie },
-    body: JSON.stringify({ count: 1, max_uses: 5, days: 7, daily_quota: 30, note: "p16m" }),
-  }).then((r) => r.json());
-  const ctx = await fetch(BASE + "/api/join", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code: inv.codes[0].toLowerCase(), nickname: "p16市场" }),
-  });
-  const cookie = (ctx.headers.get("set-cookie") || "").split(";")[0];
+  const cookie = await getSession();
   const browser = await chromium.launch({ channel: "msedge", headless: true });
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const kv = cookie.split("=");
@@ -305,20 +313,7 @@ async function testMarket() {
 
 async function testStreamingArgs() {
   console.log("\n-- D：流式部分参数（浏览器） --");
-  const login = await fetch(BASE + "/api/admin/login", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password: env("ADMIN_PASSWORD") }),
-  });
-  const adminCookie = (login.headers.get("set-cookie") || "").split(";")[0];
-  const inv = await fetch(BASE + "/api/admin/invites", {
-    method: "POST", headers: { "Content-Type": "application/json", Cookie: adminCookie },
-    body: JSON.stringify({ count: 1, max_uses: 5, days: 7, daily_quota: 30, note: "p16s" }),
-  }).then((r) => r.json());
-  const ctx = await fetch(BASE + "/api/join", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code: inv.codes[0].toLowerCase(), nickname: "p16流式" }),
-  });
-  const cookie = (ctx.headers.get("set-cookie") || "").split(";")[0];
+  const cookie = await getSession();
   const H = { "Content-Type": "application/json", Cookie: cookie };
   const task = await fetch(BASE + "/api/tasks", {
     method: "POST", headers: H, body: JSON.stringify({ mode: "writing", goal: "p16 部分参数" }),

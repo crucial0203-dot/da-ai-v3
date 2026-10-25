@@ -100,7 +100,8 @@ export function splitToolResults(content: string): Segment[] {
     const bodyStart = start + head[0].length;
     const closeAt = text.indexOf(CLOSE, bodyStart);
     const truncated = closeAt === -1;
-    const body = text.slice(bodyStart, truncated ? undefined : closeAt).replace(/^\n+/, "");
+    // 去首尾空行：闭合标记前必有一个换行，卡片里不该留白行
+    const body = text.slice(bodyStart, truncated ? undefined : closeAt).replace(/^\n+/, "").replace(/\s+$/, "");
     const { summary, isError } = summarizeToolResult(body);
     segs.push({ kind: "tool", name: head[1] || "tool", body, truncated, summary, isError });
     if (truncated) return segs;
