@@ -23,6 +23,7 @@ docs/admin-credentials.txt
 /work/
 .bak/
 *.bak
+_bak/
 logs-*.log
 
 # dist/ 只忽略项目根的打包输出；app/static/ui/bundle 是前端构建产物，必须随包发布
